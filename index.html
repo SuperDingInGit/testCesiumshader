@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cesium 三维真实感河流仿真</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body, #cesiumContainer { width: 100%; height: 100%; overflow: hidden; }
+
+        #panel {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(10, 14, 28, 0.92); backdrop-filter: blur(16px);
+            border: 1px solid rgba(255,255,255,0.12); border-radius: 14px;
+            padding: 20px 22px; color: #e0e6f0;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            z-index: 1000; min-width: 290px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+        }
+        #panel h2 {
+            font-size: 17px; font-weight: 700; margin-bottom: 6px;
+            background: linear-gradient(135deg, #4da8da, #7dd3fc);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        #panel .subtitle { font-size: 11px; color: #7f8ba0; margin-bottom: 16px; }
+        #panel label {
+            display: flex; align-items: center; justify-content: space-between;
+            font-size: 12px; margin-bottom: 10px; color: #b0bdd0;
+        }
+        #panel input[type="range"] {
+            -webkit-appearance: none; width: 120px; height: 5px;
+            border-radius: 3px; background: rgba(255,255,255,0.12); outline: none;
+        }
+        #panel input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 18px; height: 18px;
+            border-radius: 50%; background: #4da8da;
+            cursor: pointer; border: 2px solid #1e2a3a;
+        }
+        .slider-val { font-size: 11px; color: #7dd3fc; min-width: 36px; text-align: right; }
+        #panel button {
+            width: 100%; margin-top: 6px; padding: 8px 0;
+            border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
+            background: rgba(255,255,255,0.05); color: #c8d4e4;
+            font-size: 12px; cursor: pointer; transition: all 0.2s;
+        }
+        #panel button:hover {
+            background: rgba(77,168,218,0.18); border-color: rgba(77,168,218,0.4);
+        }
+        .section-title {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+            color: #4da8da; margin: 16px 0 10px 0; border-top: 1px solid rgba(255,255,255,0.06);
+            padding-top: 12px;
+        }
+        #status {
+            position: absolute; bottom: 20px; left: 20px;
+            background: rgba(0,0,0,0.75); padding: 8px 14px; border-radius: 6px;
+            font-size: 12px; color: #7dd3fc; font-family: monospace; z-index: 1000;
+        }
+        #legend {
+            position: absolute; bottom: 30px; right: 30px;
+            background: rgba(10,14,28,0.88); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+            padding: 14px 18px; color: #8899aa; font-size: 11px;
+            font-family: 'PingFang SC', sans-serif; z-index: 1000; line-height: 1.8;
+        }
+        .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+
+    <div id="panel">
+        <h2>🌊 三维河流仿真</h2>
+        <div class="subtitle">长江三峡 · 实时 3D 着色器</div>
+
+        <div class="section-title">🌊 水面参数</div>
+        <label>流速 <span class="slider-val" id="valSpeed">1.0x</span></label>
+        <input type="range" id="flowSpeed" min="0.1" max="3" step="0.1" value="1">
+
+        <label>湍流强度 <span class="slider-val" id="valTurbulence">0.6</span></label>
+        <input type="range" id="turbulence" min="0" max="1.5" step="0.05" value="0.6">
+
+        <label>波浪幅度 <span class="slider-val" id="valWave">0.5</span></label>
+        <input type="range" id="waveAmp" min="0" max="1" step="0.05" value="0.5">
+
+        <div class="section-title">💡 光照响应</div>
+        <label>菲涅尔强度 <span class="slider-val" id="valFresnel">0.8</span></label>
+        <input type="range" id="fresnel" min="0" max="1.5" step="0.05" value="0.8">
+
+        <label>高光锐度 <span class="slider-val" id="valShininess">0.7</span></label>
+        <input type="range" id="shininess" min="0.1" max="1" step="0.05" value="0.7">
+
+        <label>反射强度 <span class="slider-val" id="valReflect">0.5</span></label>
+        <input type="range" id="reflectivity" min="0" max="1" step="0.05" value="0.5">
+
+        <div class="section-title">🎨 颜色</div>
+        <label>水深 <span class="slider-val" id="valDepth">0.55</span></label>
+        <input type="range" id="waterDepth" min="0.2" max="1.2" step="0.05" value="0.55">
+
+        <label>透明度 <span class="slider-val" id="valAlpha">0.82</span></label>
+        <input type="range" id="alpha" min="0.3" max="1" step="0.05" value="0.82">
+
+        <button onclick="flyToRiver()">📷 飞到三峡峡谷</button>
+        <button onclick="flyLowAngle()">🎥 低角度观察</button>
+        <button onclick="flyTopDown()">🔝 俯瞰视角</button>
+    </div>
+
+    <div id="status">初始化中...</div>
+    <div id="legend">
+        <div><span class="dot" style="background:#0a2a4a;"></span> 深水区 (峡谷)</div>
+        <div><span class="dot" style="background:#1a6090;"></span> 浅水区</div>
+        <div><span class="dot" style="background:#6ab8d8;"></span> 太阳高光</div>
+        <div><span class="dot" style="background:#d8eef5;"></span> 泡沫/浪花</div>
+    </div>
+
+    <script>
+    (function() {
+        const statusEl = document.getElementById('status');
+
+        function log(msg) {
+            console.log('[3D-River]', msg);
+            statusEl.textContent = msg;
+        }
+
+        log('初始化 Cesium...');
+
+        // ============================================================
+        // Cesium 初始化 - 使用真实地形
+        // ============================================================
+        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWE1OWUxNy1mMWZiLTQzYjYtYTQ0OS1kMWFjYmFkN2U4NDYiLCJpZCI6NTc5MzMsImlhdCI6MTYyNzg0NTE4Mn0.XcKpgANiY19MC4bdFUXMVEBToBmqS8kuYpUlxJHYZxk';
+
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            terrain: Cesium.Terrain.fromWorldTerrain(),
+            animation: false,
+            timeline: false,
+            baseLayerPicker: false,
+            geocoder: false,
+            homeButton: false,
+            sceneModePicker: false,
+            navigationHelpButton: false,
+            fullscreenButton: false,
+            infoBox: false,
+            selectionIndicator: false,
+        });
+
+        // 开启场景光照（太阳光）
+        viewer.scene.globe.enableLighting = true;
+        viewer.scene.globe.showGroundAtmosphere = true;
+        viewer.scene.globe.depthTestAgainstTerrain = true;
+
+        // 使用 ESRI 卫星影像底图（比默认 Bing 更清晰）
+        const esriLayer = viewer.imageryLayers.addImageryProvider(
+            new Cesium.ArcGisMapServerImageryProvider({
+                url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
+            })
+        );
+
+        log('地形+影像就绪，编译着色器...');
+
+        // ============================================================
+        // 三维河流着色器
+        //
+        // 核心三维特性：
+        // 1. normalEC → 修改法线 = 水面三维波纹
+        // 2. positionToEyeEC → 菲涅尔反射（视线角度变化）
+        // 3. specular + shininess → 响应太阳高光
+        // 4. tangentToEyeMatrix → 切线空间法线转眼空间
+        // ============================================================
+
+        const riverFabric = {
+            type: 'RiverWater3D',
+            uniforms: {
+                u_time: 0.0,
+                u_flowSpeed: 1.0,
+                u_turbulence: 0.6,
+                u_waveAmp: 0.5,
+                u_fresnelPower: 0.8,
+                u_shininess: 0.7,
+                u_reflectivity: 0.5,
+                u_waterDepth: 0.55,
+                u_alpha: 0.82
+            },
+            source: /* glsl */`
+                czm_material czm_getMaterial(czm_materialInput materialInput)
+                {
+                    czm_material m = czm_getDefaultMaterial(materialInput);
+
+                    vec2 st = materialInput.st;
+
+                    // === 噪声函数 (内联以保证兼容性) ===
+                    float hash(vec2 p) {
+                        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+                    }
+
+                    float noise(vec2 p) {
+                        vec2 i = floor(p);
+                        vec2 f = fract(p);
+                        f = f * f * (3.0 - 2.0 * f);
+                        return mix(
+                            mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+                            mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+                            f.y
+                        );
+                    }
+
+                    float fbm(vec2 p) {
+                        float v = 0.0;
+                        float a = 0.5;
+                        float freq = 1.0;
+                        for (int i = 0; i < 5; i++) {
+                            v += a * noise(p * freq);
+                            freq *= 2.0;
+                            a *= 0.6;
+                        }
+                        return v;
+                    }
+
+                    // === 时间 ===
+                    float t = u_time * 0.15 * u_flowSpeed;
+                    float t2 = u_time * 0.23 * u_flowSpeed;
+
+                    // === 河道蜿蜒 ===
+                    float meander = sin(st.t * 8.0 + t * 0.7) * 0.06
+                                  + sin(st.t * 3.5 + t * 0.4) * 0.04
+                                  + cos(st.t * 13.0 - t * 0.5) * 0.025;
+
+                    float distToCenter = abs(st.s - 0.5 - meander);
+                    float bankWidth = 0.35 + u_turbulence * 0.1;
+                    float bankFade = 1.0 - smoothstep(bankWidth - 0.18, bankWidth, distToCenter);
+
+                    // 河流外 → 完全透明
+                    if (bankFade <= 0.01) {
+                        m.diffuse = vec3(0.0);
+                        m.alpha = 0.0;
+                        m.normal = materialInput.normalEC;
+                        return m;
+                    }
+
+                    // === 多层水流纹理 ===
+                    // L1: 大尺度
+                    vec2 uv1 = st * 3.0 + vec2(meander * 2.0, t * 0.8);
+                    float flow1 = fbm(uv1);
+
+                    // L2: 中层
+                    vec2 uv2 = st * 6.0 + vec2(sin(st.t * 5.0 + t) * 0.15, t2 * 1.2);
+                    float flow2 = fbm(uv2);
+
+                    // L3: 细纹
+                    vec2 uv3 = st * 14.0 + vec2(cos(st.t * 7.0 + t2) * 0.1, -t * 1.8);
+                    float flow3 = noise(uv3);
+
+                    // L4: 泡沫噪声
+                    vec2 uv4 = st * 8.0 + vec2(0.0, t * 0.5);
+                    float foamN = noise(uv4) * 0.5 + noise(uv4 * 2.0 + 0.5) * 0.3;
+
+                    float flow = (flow1 * 0.45 + flow2 * 0.35 + flow3 * 0.2) * 0.5 + 0.5;
+
+                    // === 三维法线扰动 ===
+                    // 在 st 空间的上下左右采样，计算有限差分 → 切线空间法线
+                    float eps = 0.015;
+                    float hL = fbm(uv1 + vec2(-eps, 0.0));
+                    float hR = fbm(uv1 + vec2( eps, 0.0));
+                    float hD = fbm(uv1 + vec2(0.0, -eps));
+                    float hU = fbm(uv1 + vec2(0.0,  eps));
+
+                    // 切线空间法线 (扰动强度由 u_waveAmp 和 u_turbulence 控制)
+                    float waveStrength = u_waveAmp * (0.6 + u_turbulence * 0.4);
+                    vec3 tangentNormal = normalize(vec3(
+                        (hL - hR) * waveStrength * 4.0,
+                        (hD - hU) * waveStrength * 4.0,
+                        1.0
+                    ));
+
+                    // 用 tangentToEyeMatrix 转换到眼空间
+                    m.normal = normalize(materialInput.tangentToEyeMatrix * tangentNormal);
+
+                    // 法线变化量 (用于高光计算)
+                    float normalVariation = abs(hL - hR) + abs(hD - hU);
+
+                    // === 菲涅尔反射 (视线角度依赖) ===
+                    vec3 viewDir = normalize(materialInput.positionToEyeEC);
+                    vec3 N = m.normal;
+                    float NdotV = abs(dot(N, viewDir));
+                    float fresnel = pow(1.0 - NdotV, 3.0 + u_fresnelPower * 2.0);
+                    fresnel = mix(0.02, 0.6, fresnel); // 水的菲涅尔范围
+
+                    // === 颜色 ===
+                    vec3 deepColor   = vec3(0.02, 0.10, 0.22);   // 深水: 暗蓝黑
+                    vec3 midColor    = vec3(0.05, 0.25, 0.45);   // 中层: 蓝
+                    vec3 shallowColor= vec3(0.10, 0.42, 0.60);   // 浅水: 亮蓝
+                    vec3 surfaceColor= vec3(0.15, 0.55, 0.75);   // 水面: 天蓝
+                    vec3 foamColor   = vec3(0.82, 0.90, 0.95);   // 泡沫白
+                    vec3 sunHighlight= vec3(1.0, 0.95, 0.7);     // 太阳暖色
+
+                    // 深度混合
+                    float depthF = u_waterDepth * (0.6 + flow * 0.4);
+                    vec3 waterColor = mix(deepColor, midColor, smoothstep(0.2, 0.6, depthF));
+                    waterColor = mix(waterColor, shallowColor, smoothstep(0.4, 0.8, depthF));
+                    waterColor = mix(waterColor, surfaceColor, flow * 0.35);
+
+                    // 泡沫
+                    float foamEdge = (1.0 - bankFade) * 1.6;
+                    float foamFlow = (1.0 - abs(flow - 0.5) * 2.0) * 0.5;
+                    float foam = clamp(foamEdge * 0.6 + foamFlow * 0.25 + foamN * 0.25, 0.0, 1.0);
+                    waterColor = mix(waterColor, foamColor, foam * 0.5);
+
+                    // 菲涅尔反射颜色 (天光反射)
+                    vec3 skyReflection = mix(vec3(0.3, 0.6, 0.9), vec3(0.8, 0.9, 1.0), fresnel * u_reflectivity);
+                    waterColor = mix(waterColor, skyReflection, fresnel * u_reflectivity * 0.6);
+
+                    // === 三维高光 (太阳镜面反射) ===
+                    float specIntensity = normalVariation * u_shininess * 2.0;
+                    // 高光随法线扰动强度变化，更自然
+                    float spec = pow(NdotV, 3.0 + (1.0 - u_shininess) * 60.0) * u_reflectivity;
+                    spec += specIntensity * 0.15;
+
+                    m.diffuse = waterColor;
+                    m.alpha = u_alpha * (0.65 + bankFade * 0.35);
+
+                    // 镜面反射 — 这是关键的三维光照响应
+                    m.specular = vec3(spec * 0.8);
+                    m.shininess = 10.0 + u_shininess * 90.0;
+                    m.emission = vec3(0.0); // 不自发光
+
+                    return m;
+                }
+            `
+        };
+
+        log('着色器编译完成，创建材质...');
+
+        const riverMaterial = new Cesium.Material({
+            fabric: riverFabric,
+            translucent: true
+        });
+
+        log('材质创建成功！构建河流几何体...');
+
+        // ============================================================
+        // 长江三峡 — 中心线
+        // 重庆 → 涪陵 → 万州 → 奉节 → 巫山 → 巴东 → 宜昌
+        // ============================================================
+        const centerline = [
+            [106.55, 29.56], [106.68, 29.60], [106.85, 29.67],
+            [107.00, 29.72], [107.20, 29.77], [107.40, 29.76],
+            [107.55, 29.72], [107.52, 29.80], [107.50, 29.88],
+            [107.65, 29.92], [107.80, 29.94], [107.95, 29.98],
+            [108.10, 30.02], [108.25, 30.08], [108.38, 30.16],
+            [108.45, 30.25], [108.55, 30.32], [108.70, 30.40],
+            [108.88, 30.48], [109.05, 30.56], [109.25, 30.62],
+            [109.45, 30.68], [109.60, 30.71], [109.78, 30.75],
+            [109.95, 30.78], [110.12, 30.81], [110.28, 30.84],
+            [110.45, 30.87], [110.65, 30.88], [110.85, 30.86],
+            [111.05, 30.82], [111.22, 30.76], [111.30, 30.70]
+        ];
+
+        const riverWidthDeg = 0.022;
+
+        let totalSegments = 0;
+
+        for (let i = 0; i < centerline.length - 1; i++) {
+            const p1 = centerline[i];
+            const p2 = centerline[i + 1];
+
+            const dx = p2[0] - p1[0];
+            const dy = p2[1] - p1[1];
+            const len = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+            const nx = -dy / len * riverWidthDeg;
+            const ny = dx / len * riverWidthDeg;
+
+            // 三峡峡谷段更窄
+            const t = i / centerline.length;
+            let w = 1.0;
+            if (t > 0.3 && t < 0.7) w = 0.65;  // 峡谷段
+            if (t > 0.45 && t < 0.6) w = 0.45;  // 最窄处
+
+            const positions = Cesium.Cartesian3.fromDegreesArray([
+                p1[0] + nx * w, p1[1] + ny * w,
+                p1[0] - nx * w, p1[1] - ny * w,
+                p2[0] - nx * w, p2[1] - ny * w,
+                p2[0] + nx * w, p2[1] + ny * w,
+            ]);
+
+            viewer.entities.add({
+                polygon: {
+                    hierarchy: new Cesium.PolygonHierarchy(positions),
+                    material: riverMaterial,
+                    height: 0,
+                    zIndex: 100
+                }
+            });
+            totalSegments++;
+        }
+
+        // 乌江支流
+        const wujiang = [
+            [107.55, 29.72], [107.60, 29.62], [107.58, 29.52],
+            [107.53, 29.43], [107.46, 29.36]
+        ];
+
+        for (let i = 0; i < wujiang.length - 1; i++) {
+            const p1 = wujiang[i];
+            const p2 = wujiang[i + 1];
+            const dx = p2[0] - p1[0];
+            const dy = p2[1] - p1[1];
+            const len = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+            const nx = -dy / len * riverWidthDeg * 0.42;
+            const ny = dx / len * riverWidthDeg * 0.42;
+
+            const positions = Cesium.Cartesian3.fromDegreesArray([
+                p1[0] + nx, p1[1] + ny,
+                p1[0] - nx, p1[1] - ny,
+                p2[0] - nx, p2[1] - ny,
+                p2[0] + nx, p2[1] + ny,
+            ]);
+
+            viewer.entities.add({
+                polygon: {
+                    hierarchy: new Cesium.PolygonHierarchy(positions),
+                    material: riverMaterial,
+                    height: 0,
+                    zIndex: 99
+                }
+            });
+            totalSegments++;
+        }
+
+        log(`已创建 ${totalSegments} 段河流多边形`);
+
+        // ============================================================
+        // 动画
+        // ============================================================
+        const startTime = performance.now() / 1000;
+
+        viewer.scene.preRender.addEventListener(function() {
+            const elapsed = (performance.now() / 1000) - startTime;
+            if (riverMaterial.uniforms) {
+                riverMaterial.uniforms.u_time = elapsed;
+            }
+        });
+
+        // ============================================================
+        // 相机飞行
+        // ============================================================
+        window.flyToRiver = function() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(108.6, 30.4, 45000),
+                orientation: {
+                    heading: Cesium.Math.toRadians(40),
+                    pitch: Cesium.Math.toRadians(-45),
+                    roll: 0
+                },
+                duration: 3.0
+            });
+        };
+
+        // 低角度 — 这是关键！能看到三维法线扰动
+        window.flyLowAngle = function() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(109.5, 30.72, 8000),
+                orientation: {
+                    heading: Cesium.Math.toRadians(60),
+                    pitch: Cesium.Math.toRadians(-18),  // 低角度！
+                    roll: 0
+                },
+                duration: 3.0
+            });
+        };
+
+        window.flyTopDown = function() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(108.5, 30.2, 80000),
+                orientation: {
+                    heading: Cesium.Math.toRadians(0),
+                    pitch: Cesium.Math.toRadians(-90),
+                    roll: 0
+                },
+                duration: 2.5
+            });
+        };
+
+        // ============================================================
+        // UI 绑定
+        // ============================================================
+        const uiMap = {
+            'flowSpeed':    { key: 'u_flowSpeed',     fmt: v => v.toFixed(1) + 'x', valId: 'valSpeed' },
+            'turbulence':   { key: 'u_turbulence',    fmt: v => v.toFixed(2),      valId: 'valTurbulence' },
+            'waveAmp':      { key: 'u_waveAmp',       fmt: v => v.toFixed(2),      valId: 'valWave' },
+            'fresnel':      { key: 'u_fresnelPower',  fmt: v => v.toFixed(2),      valId: 'valFresnel' },
+            'shininess':    { key: 'u_shininess',     fmt: v => v.toFixed(2),      valId: 'valShininess' },
+            'reflectivity': { key: 'u_reflectivity',  fmt: v => v.toFixed(2),      valId: 'valReflect' },
+            'waterDepth':   { key: 'u_waterDepth',    fmt: v => v.toFixed(2),      valId: 'valDepth' },
+            'alpha':        { key: 'u_alpha',         fmt: v => v.toFixed(2),      valId: 'valAlpha' },
+        };
+
+        Object.keys(uiMap).forEach(function(id) {
+            var cfg = uiMap[id];
+            var slider = document.getElementById(id);
+            var span = document.getElementById(cfg.valId);
+            slider.addEventListener('input', function() {
+                var v = parseFloat(slider.value);
+                span.textContent = cfg.fmt(v);
+                if (riverMaterial.uniforms) {
+                    riverMaterial.uniforms[cfg.key] = v;
+                }
+            });
+        });
+
+        // 初始飞行
+        setTimeout(function() {
+            log('✅ 就绪！飞行到三峡...');
+            flyToRiver();
+        }, 2500);
+
+        // 调试
+        window.__river3d = {
+            viewer: viewer,
+            material: riverMaterial
+        };
+    })();
+    </script>
+</body>
+</html>

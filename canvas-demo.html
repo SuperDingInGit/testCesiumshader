@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>河流着色器仿真 - Canvas 2D 版本</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0e1a;
+            color: #e0e6f0;
+            font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+        #canvasWrapper {
+            flex: 1;
+            position: relative;
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a2035 100%);
+        }
+        #riverCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #panel {
+            width: 300px;
+            background: rgba(10, 14, 28, 0.95);
+            border-left: 1px solid rgba(255,255,255,0.08);
+            padding: 24px;
+            overflow-y: auto;
+        }
+        #panel h2 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            background: linear-gradient(135deg, #4da8da, #7dd3fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        #panel .subtitle {
+            font-size: 11px;
+            color: #7f8ba0;
+            margin-bottom: 20px;
+        }
+        .control-group {
+            margin-bottom: 18px;
+        }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #b0bdd0;
+            margin-bottom: 8px;
+        }
+        .control-group input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.1);
+            outline: none;
+        }
+        .control-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #4da8da;
+            cursor: pointer;
+            border: 2px solid #1e2a3a;
+        }
+        .slider-val {
+            font-size: 11px;
+            color: #7dd3fc;
+            min-width: 36px;
+            text-align: right;
+        }
+        .info {
+            margin-top: 24px;
+            padding: 14px;
+            background: rgba(77, 168, 218, 0.08);
+            border-radius: 8px;
+            font-size: 11px;
+            color: #7f8ba0;
+            line-height: 1.6;
+        }
+        .fps {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: rgba(0,0,0,0.6);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: monospace;
+            color: #7dd3fc;
+        }
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(10, 14, 28, 0.88);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 14px 18px;
+            font-size: 11px;
+            color: #8899aa;
+            line-height: 1.8;
+        }
+        .legend .dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="canvasWrapper">
+            <canvas id="riverCanvas"></canvas>
+            <div class="fps" id="fps">FPS: --</div>
+            <div class="legend">
+                <div><span class="dot" style="background:#1a5c8a;"></span> 深水区</div>
+                <div><span class="dot" style="background:#3b9dc4;"></span> 浅水区</div>
+                <div><span class="dot" style="background:#8ed6f0;"></span> 泡沫/浪花</div>
+                <div><span class="dot" style="background:rgba(255,255,255,0.5);"></span> 高光反射</div>
+            </div>
+        </div>
+
+        <div id="panel">
+            <h2>🌊 真实感河流仿真</h2>
+            <div class="subtitle">Canvas 2D 着色器实现</div>
+
+            <div class="control-group">
+                <label>流速 <span class="slider-val" id="valSpeed">1.0x</span></label>
+                <input type="range" id="flowSpeed" min="0.1" max="3" step="0.1" value="1">
+            </div>
+
+            <div class="control-group">
+                <label>湍流强度 <span class="slider-val" id="valTurbulence">0.5</span></label>
+                <input type="range" id="turbulence" min="0" max="1" step="0.05" value="0.5">
+            </div>
+
+            <div class="control-group">
+                <label>水深 <span class="slider-val" id="valDepth">0.6</span></label>
+                <input type="range" id="waterDepth" min="0.2" max="1.2" step="0.05" value="0.6">
+            </div>
+
+            <div class="control-group">
+                <label>透明度 <span class="slider-val" id="valAlpha">0.85</span></label>
+                <input type="range" id="alpha" min="0.3" max="1" step="0.05" value="0.85">
+            </div>
+
+            <div class="control-group">
+                <label>河道宽度 <span class="slider-val" id="valWidth">0.35</span></label>
+                <input type="range" id="riverWidth" min="0.2" max="0.6" step="0.02" value="0.35">
+            </div>
+
+            <div class="control-group">
+                <label>蜿蜒程度 <span class="slider-val" id="valMeander">0.5</span></label>
+                <input type="range" id="meander" min="0" max="1" step="0.05" value="0.5">
+            </div>
+
+            <div class="info">
+                <strong>技术实现</strong><br>
+                • FBM 分形布朗运动 (5层噪声)<br>
+                • 多层水流叠加<br>
+                • 动态河岸泡沫<br>
+                • 实时法线扰动<br>
+                • Canvas 2D 逐像素渲染
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // 河流着色器 - Canvas 2D 实现
+        // 将 GLSL 逻辑移植到 JavaScript + ImageData
+        // ============================================================
+
+        const canvas = document.getElementById('riverCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // 参数
+        const params = {
+            flowSpeed: 1.0,
+            turbulence: 0.5,
+            waterDepth: 0.6,
+            alpha: 0.85,
+            riverWidth: 0.35,
+            meander: 0.5
+        };
+
+        // 渲染分辨率（降低以提高性能）
+        const SCALE = 0.5;
+        let width, height;
+
+        function resize() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * SCALE;
+            canvas.height = rect.height * SCALE;
+            width = canvas.width;
+            height = canvas.height;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        // ============================================================
+        // 噪声函数 (GLSL hash/noise/fbm 的 JS 实现)
+        // ============================================================
+
+        function hash(x, y) {
+            const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+            return n - Math.floor(n);
+        }
+
+        function noise(x, y) {
+            const ix = Math.floor(x);
+            const iy = Math.floor(y);
+            const fx = x - ix;
+            const fy = y - iy;
+
+            const u = fx * fx * (3 - 2 * fx);
+            const v = fy * fy * (3 - 2 * fy);
+
+            const a = hash(ix, iy);
+            const b = hash(ix + 1, iy);
+            const c = hash(ix, iy + 1);
+            const d = hash(ix + 1, iy + 1);
+
+            return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+        }
+
+        function fbm(x, y) {
+            let value = 0;
+            let amplitude = 0.5;
+            let frequency = 1;
+            const lacunarity = 2.0;
+            const persistence = 0.6;
+
+            for (let i = 0; i < 5; i++) {
+                value += amplitude * noise(x * frequency, y * frequency);
+                frequency *= lacunarity;
+                amplitude *= persistence;
+            }
+            return value;
+        }
+
+        function swirlNoise(x, y, t, turbulence) {
+            const n = fbm(x + t * 0.3, y);
+            const angle = n * Math.PI * 2 * turbulence;
+            const s = Math.sin(angle);
+            const c = Math.cos(angle);
+            return fbm(
+                x + 0.5 * (c * x - s * y),
+                y + 0.5 * (s * x + c * y)
+            );
+        }
+
+        // ============================================================
+        // 颜色混合工具
+        // ============================================================
+
+        function lerp(a, b, t) {
+            return a + (b - a) * t;
+        }
+
+        function mixColor(c1, c2, t) {
+            return [
+                lerp(c1[0], c2[0], t),
+                lerp(c1[1], c2[1], t),
+                lerp(c1[2], c2[2], t)
+            ];
+        }
+
+        // 颜色定义
+        const deepColor = [10, 38, 82];      // 深蓝
+        const shallowColor = [20, 90, 140];  // 蓝绿
+        const surfaceColor = [46, 133, 184]; // 亮蓝
+        const foamColor = [217, 235, 242];   // 泡沫白
+        const bedColor = [64, 56, 46];       // 河床褐
+
+        // ============================================================
+        // 主渲染循环
+        // ============================================================
+
+        let startTime = Date.now();
+        let lastFpsTime = startTime;
+        let frameCount = 0;
+
+        function render() {
+            const now = Date.now();
+            const elapsed = (now - startTime) / 1000;
+
+            // FPS 计算
+            frameCount++;
+            if (now - lastFpsTime > 1000) {
+                document.getElementById('fps').textContent = 'FPS: ' + frameCount;
+                frameCount = 0;
+                lastFpsTime = now;
+            }
+
+            const imageData = ctx.createImageData(width, height);
+            const data = imageData.data;
+
+            const t = elapsed * 0.15 * params.flowSpeed;
+            const t2 = elapsed * 0.23 * params.flowSpeed;
+
+            for (let py = 0; py < height; py++) {
+                // 归一化坐标 [0, 1]
+                const st_y = py / height;
+
+                // 蜿蜒计算
+                const meander = Math.sin(st_y * 8 + t * 0.7) * 0.06 * params.meander +
+                               Math.sin(st_y * 3.5 + t * 0.4) * 0.04 * params.meander +
+                               Math.cos(st_y * 13 - t * 0.5) * 0.025 * params.meander;
+
+                for (let px = 0; px < width; px++) {
+                    const st_x = px / width;
+
+                    // 到河道中心的距离
+                    const distToCenter = Math.abs(st_x - 0.5 - meander);
+
+                    // 河岸渐变
+                    const bankWidth = params.riverWidth + params.turbulence * 0.15;
+                    const bankFade = Math.max(0, Math.min(1, (bankWidth - distToCenter) / 0.12));
+
+                    if (bankFade <= 0) {
+                        // 非河流区域（陆地）- 跳过或简单颜色
+                        const idx = (py * width + px) * 4;
+                        data[idx] = 30;
+                        data[idx + 1] = 35;
+                        data[idx + 2] = 45;
+                        data[idx + 3] = 255;
+                        continue;
+                    }
+
+                    // --- 多层水流纹理 ---
+
+                    // 第一层：大尺度流动
+                    const uv1_x = st_x * 3;
+                    const uv1_y = st_y * 3 + t * 0.8;
+                    const flow1 = fbm(uv1_x + meander * 2, uv1_y);
+
+                    // 第二层：中层漩涡
+                    const uv2_x = st_x * 6 + Math.sin(st_y * 5 + t) * 0.15;
+                    const uv2_y = st_y * 6 + t2 * 1.2;
+                    const flow2 = swirlNoise(uv2_x, uv2_y, t, params.turbulence);
+
+                    // 第三层：细微波纹
+                    const uv3_x = st_x * 12 + Math.cos(st_y * 7 + t2) * 0.1;
+                    const uv3_y = st_y * 12 - t * 1.8;
+                    const flow3 = noise(uv3_x, uv3_y);
+
+                    // 第四层：泡沫噪声
+                    const uv4_x = st_x * 8;
+                    const uv4_y = st_y * 8 + t * 0.5;
+                    const foamNoise = noise(uv4_x, uv4_y) * 0.5 + noise(uv4_x * 2 + 0.5, uv4_y * 2) * 0.3;
+
+                    // 合成水流
+                    let flow = flow1 * 0.45 + flow2 * 0.35 + flow3 * 0.2;
+                    flow = flow * 0.5 + 0.5;
+
+                    // --- 颜色计算 ---
+
+                    const depthFactor = params.waterDepth * (0.7 + flow * 0.3);
+                    let color = mixColor(deepColor, shallowColor, depthFactor);
+                    color = mixColor(color, surfaceColor, flow * 0.4);
+
+                    // 泡沫效果
+                    const foamEdge = (1 - bankFade) * 1.4;
+                    const foamEdgeSmooth = Math.max(0, Math.min(1, foamEdge / 0.25));
+                    const foamFlow = (1 - Math.abs(flow - 0.5) * 2) * 0.6;
+                    let foam = foamEdgeSmooth * 0.7 + foamFlow * 0.3 + foamNoise * 0.25;
+                    foam = Math.max(0, Math.min(1, foam));
+
+                    color = mixColor(color, foamColor, foam * 0.55);
+
+                    // 高光
+                    const ripple = Math.abs(flow1 - flow2) * params.turbulence * 2;
+                    const highlight = Math.pow(flow * ripple, 2.5) * 0.35;
+                    color[0] += highlight * 0.6 * 255;
+                    color[1] += highlight * 0.75 * 255;
+                    color[2] += highlight * 0.9 * 255;
+
+                    // 河床可见度
+                    const bedVisibility = (1 - depthFactor) * bankFade * 0.25;
+                    color = mixColor(color, bedColor, bedVisibility);
+
+                    // 写入像素
+                    const idx = (py * width + px) * 4;
+                    data[idx] = Math.max(0, Math.min(255, color[0]));
+                    data[idx + 1] = Math.max(0, Math.min(255, color[1]));
+                    data[idx + 2] = Math.max(0, Math.min(255, color[2]));
+                    data[idx + 3] = 255;
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+            requestAnimationFrame(render);
+        }
+
+        // ============================================================
+        // UI 绑定
+        // ============================================================
+
+        function bindSlider(id, param, valId, transform) {
+            const slider = document.getElementById(id);
+            const valSpan = document.getElementById(valId);
+            slider.addEventListener('input', () => {
+                const v = parseFloat(slider.value);
+                params[param] = v;
+                valSpan.textContent = transform ? transform(v) : v.toFixed(2);
+            });
+        }
+
+        bindSlider('flowSpeed', 'flowSpeed', 'valSpeed', v => v.toFixed(1) + 'x');
+        bindSlider('turbulence', 'turbulence', 'valTurbulence', v => v.toFixed(2));
+        bindSlider('waterDepth', 'waterDepth', 'valDepth', v => v.toFixed(2));
+        bindSlider('alpha', 'alpha', 'valAlpha', v => v.toFixed(2));
+        bindSlider('riverWidth', 'riverWidth', 'valWidth', v => v.toFixed(2));
+        bindSlider('meander', 'meander', 'valMeander', v => v.toFixed(2));
+
+        // 启动渲染
+        requestAnimationFrame(render);
+
+        console.log('🌊 Canvas 2D 河流着色器已启动');
+    </script>
+</body>
+</html>
