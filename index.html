@@ -83,14 +83,6 @@
         <label>波浪幅度 <span class="slider-val" id="valWave">0.5</span></label>
         <input type="range" id="waveAmp" min="0" max="1" step="0.05" value="0.5">
 
-        <div class="section-title">💡 光照响应</div>
-        <label>菲涅尔强度 <span class="slider-val" id="valFresnel">0.8</span></label>
-        <input type="range" id="fresnel" min="0" max="1.5" step="0.05" value="0.8">
-        <label>高光锐度 <span class="slider-val" id="valShininess">0.7</span></label>
-        <input type="range" id="shininess" min="0.1" max="1" step="0.05" value="0.7">
-        <label>反射强度 <span class="slider-val" id="valReflect">0.5</span></label>
-        <input type="range" id="reflectivity" min="0" max="1" step="0.05" value="0.5">
-
         <div class="section-title">🎨 颜色</div>
         <label>水深 <span class="slider-val" id="valDepth">0.55</span></label>
         <input type="range" id="waterDepth" min="0.2" max="1.2" step="0.05" value="0.55">
@@ -106,7 +98,6 @@
     <div id="legend">
         <div><span class="dot" style="background:#0a2a4a;"></span> 深水区</div>
         <div><span class="dot" style="background:#1a6090;"></span> 浅水区</div>
-        <div><span class="dot" style="background:#6ab8d8;"></span> 太阳高光</div>
         <div><span class="dot" style="background:#d8eef5;"></span> 泡沫/浪花</div>
     </div>
 
@@ -128,18 +119,21 @@
 
         viewer.scene.globe.enableLighting = true;
         viewer.scene.globe.showGroundAtmosphere = true;
+        viewer.scene.globe.depthTestAgainstTerrain = true;
         log('Cesium Viewer 就绪');
 
         // ============================================================
         // 河流着色器
         //
-        // ★ 核心修复：GLSL 不允许函数内部嵌套定义函数！
-        //   hash / noise / fbm 必须定义在 czm_getMaterial 外部（顶层）
-        //   这是之前显示白色的根本原因
+        // 修复要点：
+        // 1. hash/noise/fbm 定义在 czm_getMaterial 外部（GLSL 不允许嵌套函数）
+        // 2. 不使用 tangentToEyeMatrix（Entity polygon 可能不传递此矩阵）
+        // 3. 不使用 positionToEyeEC（可能未初始化导致 NaN）
+        // 4. 用 normalEC 做简单法线扰动
         // ============================================================
 
         var glslSource = [
-            // === 顶层辅助函数（必须在 czm_getMaterial 之前）===
+            '// === 顶层辅助函数 ===',
             'float hash(vec2 p) {',
             '    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
             '}',
@@ -167,7 +161,6 @@
             '    return v;',
             '}',
             '',
-            // === 主函数 ===
             'czm_material czm_getMaterial(czm_materialInput materialInput) {',
             '    czm_material m = czm_getDefaultMaterial(materialInput);',
             '    vec2 st = materialInput.st;',
@@ -175,6 +168,7 @@
             '    float t = u_time * 0.15 * u_flowSpeed;',
             '    float t2 = u_time * 0.23 * u_flowSpeed;',
             '',
+            '    // 蜿蜒',
             '    float meander = sin(st.t * 8.0 + t * 0.7) * 0.06',
             '                  + sin(st.t * 3.5 + t * 0.4) * 0.04',
             '                  + cos(st.t * 13.0 - t * 0.5) * 0.025;',
@@ -188,6 +182,7 @@
             '        return m;',
             '    }',
             '',
+            '    // 多层水流',
             '    vec2 uv1 = st * 3.0 + vec2(meander * 2.0, t * 0.8);',
             '    float flow1 = fbm(uv1);',
             '    vec2 uv2 = st * 6.0 + vec2(sin(st.t * 5.0 + t) * 0.15, t2 * 1.2);',
@@ -198,38 +193,37 @@
             '    float foamN = noise(uv4) * 0.5 + noise(uv4 * 2.0 + 0.5) * 0.3;',
             '    float flow = (flow1 * 0.45 + flow2 * 0.35 + flow3 * 0.2) * 0.5 + 0.5;',
             '',
+            '    // 法线扰动（用 normalEC 而非 tangentToEyeMatrix）',
             '    float eps = 0.015;',
             '    float hL = fbm(uv1 + vec2(-eps, 0.0));',
             '    float hR = fbm(uv1 + vec2(eps, 0.0));',
             '    float hD = fbm(uv1 + vec2(0.0, -eps));',
             '    float hU = fbm(uv1 + vec2(0.0, eps));',
             '    float ws = u_waveAmp * (0.6 + u_turbulence * 0.4);',
-            '    vec3 tangentN = normalize(vec3((hL - hR) * ws * 4.0, (hD - hU) * ws * 4.0, 1.0));',
-            '    m.normal = normalize(materialInput.tangentToEyeMatrix * tangentN);',
+            '    vec3 n = materialInput.normalEC;',
+            '    n.x += (hL - hR) * ws * 3.0;',
+            '    n.y += (hD - hU) * ws * 3.0;',
+            '    m.normal = normalize(n);',
             '',
-            '    vec3 V = normalize(materialInput.positionToEyeEC);',
-            '    float NdotV = abs(dot(m.normal, V));',
-            '    float fresnel = pow(1.0 - NdotV, 3.0 + u_fresnelPower * 2.0);',
-            '    fresnel = mix(0.02, 0.6, fresnel);',
-            '',
+            '    // 颜色',
             '    float df = u_waterDepth * (0.6 + flow * 0.4);',
             '    vec3 wc = mix(vec3(0.02, 0.10, 0.22), vec3(0.05, 0.25, 0.45), smoothstep(0.2, 0.6, df));',
             '    wc = mix(wc, vec3(0.10, 0.42, 0.60), smoothstep(0.4, 0.8, df));',
             '    wc = mix(wc, vec3(0.15, 0.55, 0.75), flow * 0.35);',
             '',
+            '    // 泡沫',
             '    float fe = (1.0 - bankFade) * 1.6;',
             '    float foam = clamp(fe * 0.6 + (1.0 - abs(flow - 0.5) * 2.0) * 0.25 + foamN * 0.25, 0.0, 1.0);',
             '    wc = mix(wc, vec3(0.82, 0.90, 0.95), foam * 0.5);',
             '',
-            '    vec3 skyRefl = mix(vec3(0.3, 0.6, 0.9), vec3(0.8, 0.9, 1.0), fresnel * u_reflectivity);',
-            '    wc = mix(wc, skyRefl, fresnel * u_reflectivity * 0.6);',
-            '',
-            '    float spec = pow(NdotV, 3.0 + (1.0 - u_shininess) * 60.0) * u_reflectivity;',
+            '    // 高光（基于法线扰动）',
+            '    float ripple = abs(hL - hR) + abs(hD - hU);',
+            '    wc += ripple * ws * vec3(0.3, 0.4, 0.5);',
             '',
             '    m.diffuse = wc;',
             '    m.alpha = u_alpha * (0.65 + bankFade * 0.35);',
-            '    m.specular = spec * 0.8;',
-            '    m.shininess = 10.0 + u_shininess * 90.0;',
+            '    m.specular = 0.3 + ripple * 0.4;',
+            '    m.shininess = 20.0;',
             '',
             '    return m;',
             '}'
@@ -243,9 +237,6 @@
                     u_flowSpeed: 1.0,
                     u_turbulence: 0.6,
                     u_waveAmp: 0.5,
-                    u_fresnelPower: 0.8,
-                    u_shininess: 0.7,
-                    u_reflectivity: 0.5,
                     u_waterDepth: 0.55,
                     u_alpha: 0.82
                 },
@@ -254,11 +245,13 @@
             translucent: true
         });
 
-        log('✅ 河流材质创建成功');
+        log('✅ 材质创建成功');
 
         // ============================================================
-        // 长江三峡中心线
+        // 长江三峡 — 用 GroundPrimitive + MaterialAppearance
+        // 这是正确的方式！Entity polygon 不完全支持自定义 source
         // ============================================================
+
         const centerline = [
             [106.55, 29.56], [106.68, 29.60], [106.85, 29.67],
             [107.00, 29.72], [107.20, 29.77], [107.40, 29.76],
@@ -274,7 +267,7 @@
         ];
 
         const riverWidthDeg = 0.022;
-        let totalSegments = 0;
+        var geometryInstances = [];
 
         for (let i = 0; i < centerline.length - 1; i++) {
             const p1 = centerline[i];
@@ -290,21 +283,18 @@
             if (t > 0.3 && t < 0.7) w = 0.65;
             if (t > 0.45 && t < 0.6) w = 0.45;
 
-            viewer.entities.add({
-                polygon: {
-                    hierarchy: new Cesium.PolygonHierarchy(
-                        Cesium.Cartesian3.fromDegreesArray([
-                            p1[0] + nx * w, p1[1] + ny * w,
-                            p1[0] - nx * w, p1[1] - ny * w,
-                            p2[0] - nx * w, p2[1] - ny * w,
-                            p2[0] + nx * w, p2[1] + ny * w,
-                        ])
-                    ),
-                    material: riverMaterial,
-                    height: 0
-                }
-            });
-            totalSegments++;
+            var positions = Cesium.Cartesian3.fromDegreesArray([
+                p1[0] + nx * w, p1[1] + ny * w,
+                p1[0] - nx * w, p1[1] - ny * w,
+                p2[0] - nx * w, p2[1] - ny * w,
+                p2[0] + nx * w, p2[1] + ny * w,
+            ]);
+
+            geometryInstances.push(new Cesium.GeometryInstance({
+                geometry: new Cesium.PolygonGeometry({
+                    polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+                }),
+            }));
         }
 
         // 乌江支流
@@ -322,24 +312,32 @@
             const nx = -dy / len * riverWidthDeg * 0.42;
             const ny = dx / len * riverWidthDeg * 0.42;
 
-            viewer.entities.add({
-                polygon: {
-                    hierarchy: new Cesium.PolygonHierarchy(
-                        Cesium.Cartesian3.fromDegreesArray([
-                            p1[0] + nx, p1[1] + ny,
-                            p1[0] - nx, p1[1] - ny,
-                            p2[0] - nx, p2[1] - ny,
-                            p2[0] + nx, p2[1] + ny,
-                        ])
-                    ),
-                    material: riverMaterial,
-                    height: 0
-                }
-            });
-            totalSegments++;
+            var positions = Cesium.Cartesian3.fromDegreesArray([
+                p1[0] + nx, p1[1] + ny,
+                p1[0] - nx, p1[1] - ny,
+                p2[0] - nx, p2[1] - ny,
+                p2[0] + nx, p2[1] + ny,
+            ]);
+
+            geometryInstances.push(new Cesium.GeometryInstance({
+                geometry: new Cesium.PolygonGeometry({
+                    polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+                }),
+            }));
         }
 
-        log(`已创建 ${totalSegments} 段河流`);
+        // 用 GroundPrimitive + MaterialAppearance
+        var riverPrimitive = viewer.scene.primitives.add(
+            new Cesium.GroundPrimitive({
+                geometryInstances: geometryInstances,
+                appearance: new Cesium.MaterialAppearance({
+                    material: riverMaterial,
+                    translucent: true,
+                }),
+            })
+        );
+
+        log(`已创建 ${geometryInstances.length} 段河流 (GroundPrimitive)`);
 
         // ============================================================
         // 动画
@@ -384,10 +382,11 @@
         // UI
         // ============================================================
         const uiMap = {
-            'flowSpeed': 'u_flowSpeed', 'turbulence': 'u_turbulence',
-            'waveAmp': 'u_waveAmp', 'fresnel': 'u_fresnelPower',
-            'shininess': 'u_shininess', 'reflectivity': 'u_reflectivity',
-            'waterDepth': 'u_waterDepth', 'alpha': 'u_alpha',
+            'flowSpeed': 'u_flowSpeed',
+            'turbulence': 'u_turbulence',
+            'waveAmp': 'u_waveAmp',
+            'waterDepth': 'u_waterDepth',
+            'alpha': 'u_alpha',
         };
 
         Object.keys(uiMap).forEach(function(id) {
