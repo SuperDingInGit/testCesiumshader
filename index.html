@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cesium 三维真实感河流仿真</title>
+    <title>Cesium 三维河流仿真 — Shadertoy 风格</title>
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.97/Build/Cesium/Cesium.js"></script>
     <link href="https://cesium.com/downloads/cesiumjs/releases/1.97/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
     <style>
@@ -73,21 +73,23 @@
 
     <div id="panel">
         <h2>🌊 三维河流仿真</h2>
-        <div class="subtitle">长江三峡 · 实时 3D 着色器</div>
+        <div class="subtitle">Shadertoy 风格 · 长江三峡</div>
 
         <div class="section-title">🌊 水面参数</div>
         <label>流速 <span class="slider-val" id="valSpeed">1.0x</span></label>
         <input type="range" id="flowSpeed" min="0.1" max="3" step="0.1" value="1">
-        <label>湍流强度 <span class="slider-val" id="valTurbulence">0.6</span></label>
-        <input type="range" id="turbulence" min="0" max="1.5" step="0.05" value="0.6">
-        <label>波浪幅度 <span class="slider-val" id="valWave">0.5</span></label>
-        <input type="range" id="waveAmp" min="0" max="1" step="0.05" value="0.5">
+        <label>湍流强度 <span class="slider-val" id="valTurbulence">0.7</span></label>
+        <input type="range" id="turbulence" min="0" max="1.5" step="0.05" value="0.7">
+        <label>波浪幅度 <span class="slider-val" id="valWave">0.6</span></label>
+        <input type="range" id="waveAmp" min="0" max="1" step="0.05" value="0.6">
 
         <div class="section-title">🎨 颜色</div>
         <label>水深 <span class="slider-val" id="valDepth">0.55</span></label>
         <input type="range" id="waterDepth" min="0.2" max="1.2" step="0.05" value="0.55">
-        <label>透明度 <span class="slider-val" id="valAlpha">0.82</span></label>
-        <input type="range" id="alpha" min="0.3" max="1" step="0.05" value="0.82">
+        <label>透明度 <span class="slider-val" id="valAlpha">0.85</span></label>
+        <input type="range" id="alpha" min="0.3" max="1" step="0.05" value="0.85">
+        <label>泡沫量 <span class="slider-val" id="valFoam">0.6</span></label>
+        <input type="range" id="foamAmount" min="0" max="1.5" step="0.05" value="0.6">
 
         <button onclick="flyToRiver()">📷 飞到三峡峡谷</button>
         <button onclick="flyLowAngle()">🎥 低角度观察</button>
@@ -96,9 +98,10 @@
 
     <div id="status">初始化中...</div>
     <div id="legend">
-        <div><span class="dot" style="background:#0a2a4a;"></span> 深水区</div>
-        <div><span class="dot" style="background:#1a6090;"></span> 浅水区</div>
-        <div><span class="dot" style="background:#d8eef5;"></span> 泡沫/浪花</div>
+        <div><span class="dot" style="background:#0a1a2e;"></span> 深水区</div>
+        <div><span class="dot" style="background:#1a5070;"></span> 中层水</div>
+        <div><span class="dot" style="background:#3a90b0;"></span> 浅水区</div>
+        <div><span class="dot" style="background:#e0f0f5;"></span> 泡沫/浪花</div>
     </div>
 
     <script>
@@ -123,57 +126,68 @@
         log('Cesium Viewer 就绪');
 
         // ============================================================
-        // 河流着色器
+        // Shadertoy 风格河流着色器
         //
-        // 修复要点：
-        // 1. hash/noise/fbm 定义在 czm_getMaterial 外部（GLSL 不允许嵌套函数）
-        // 2. 不使用 tangentToEyeMatrix（Entity polygon 可能不传递此矩阵）
-        // 3. 不使用 positionToEyeEC（可能未初始化导致 NaN）
-        // 4. 用 normalEC 做简单法线扰动
+        // 参照 "Where the River Goes" by P_Malin 的核心算法：
+        // 1. 多层 FBM 噪声叠加（不同频率/振幅）
+        // 2. 基于流速场的水流方向
+        // 3. 湍流驱动的动态泡沫
+        // 4. 多尺度法线扰动
+        // 5. 深度渐变 + 天空反射 + 太阳高光
         // ============================================================
 
         var glslSource = [
-            '// === 顶层辅助函数 ===',
+            // === 顶层辅助函数 ===',
             'float hash(vec2 p) {',
-            '    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+            '    p = fract(p * vec2(123.34, 456.21));',
+            '    p += dot(p, p + 45.32);',
+            '    return fract(p.x * p.y);',
             '}',
             '',
+            // 值噪声 — 比之前更平滑
             'float noise(vec2 p) {',
             '    vec2 i = floor(p);',
             '    vec2 f = fract(p);',
-            '    f = f * f * (3.0 - 2.0 * f);',
+            '    vec2 u = f * f * (3.0 - 2.0 * f);',
             '    return mix(',
-            '        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),',
-            '        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),',
-            '        f.y',
+            '        mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),',
+            '        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),',
+            '        u.y',
             '    );',
             '}',
             '',
+            // FBM — 多八度噪声叠加
             'float fbm(vec2 p) {',
             '    float v = 0.0;',
             '    float a = 0.5;',
-            '    float freq = 1.0;',
-            '    for (int i = 0; i < 5; i++) {',
-            '        v += a * noise(p * freq);',
-            '        freq *= 2.0;',
-            '        a *= 0.6;',
+            '    for (int i = 0; i < 6; i++) {',
+            '        v += a * noise(p);',
+            '        p = p * 2.0 + vec2(3.7, 1.3);',  // 旋转避免网格伪影
+            '        a *= 0.5;',
             '    }',
             '    return v;',
             '}',
             '',
+            // 域扭曲 (Domain Warping) — Shadertoy 常用技巧
+            'float warpedFbm(vec2 p, float t) {',
+            '    vec2 q = vec2(fbm(p + vec2(0.0, t * 0.3)), fbm(p + vec2(5.2, 1.3) + vec2(t * 0.2, 0.0)));',
+            '    return fbm(p + q * 1.5);',
+            '}',
+            '',
+            // === 主材质函数 ===
             'czm_material czm_getMaterial(czm_materialInput materialInput) {',
             '    czm_material m = czm_getDefaultMaterial(materialInput);',
             '    vec2 st = materialInput.st;',
             '',
             '    float t = u_time * 0.15 * u_flowSpeed;',
-            '    float t2 = u_time * 0.23 * u_flowSpeed;',
+            '    float t2 = u_time * 0.27 * u_flowSpeed;',
             '',
-            '    // 蜿蜒',
+            '    // === 河道形状 ===',
             '    float meander = sin(st.t * 8.0 + t * 0.7) * 0.06',
             '                  + sin(st.t * 3.5 + t * 0.4) * 0.04',
             '                  + cos(st.t * 13.0 - t * 0.5) * 0.025;',
             '    float distToCenter = abs(st.s - 0.5 - meander);',
-            '    float bankWidth = 0.35 + u_turbulence * 0.1;',
+            '    float bankWidth = 0.35 + u_turbulence * 0.08;',
             '    float bankFade = 1.0 - smoothstep(bankWidth - 0.18, bankWidth, distToCenter);',
             '',
             '    if (bankFade <= 0.01) {',
@@ -182,48 +196,91 @@
             '        return m;',
             '    }',
             '',
-            '    // 多层水流',
-            '    vec2 uv1 = st * 3.0 + vec2(meander * 2.0, t * 0.8);',
-            '    float flow1 = fbm(uv1);',
-            '    vec2 uv2 = st * 6.0 + vec2(sin(st.t * 5.0 + t) * 0.15, t2 * 1.2);',
-            '    float flow2 = fbm(uv2);',
-            '    vec2 uv3 = st * 14.0 + vec2(cos(st.t * 7.0 + t2) * 0.1, -t * 1.8);',
-            '    float flow3 = noise(uv3);',
-            '    vec2 uv4 = st * 8.0 + vec2(0.0, t * 0.5);',
-            '    float foamN = noise(uv4) * 0.5 + noise(uv4 * 2.0 + 0.5) * 0.3;',
-            '    float flow = (flow1 * 0.45 + flow2 * 0.35 + flow3 * 0.2) * 0.5 + 0.5;',
+            '    // === 多层水流纹理 (Shadertoy 风格多层叠加) ===',
+            '    // L1: 大尺度流动 — 域扭曲 FBM',
+            '    vec2 uv1 = st * 2.5 + vec2(meander * 2.0, t * 0.8);',
+            '    float flow1 = warpedFbm(uv1, t);',
             '',
-            '    // 法线扰动（用 normalEC 而非 tangentToEyeMatrix）',
-            '    float eps = 0.015;',
-            '    float hL = fbm(uv1 + vec2(-eps, 0.0));',
-            '    float hR = fbm(uv1 + vec2(eps, 0.0));',
-            '    float hD = fbm(uv1 + vec2(0.0, -eps));',
-            '    float hU = fbm(uv1 + vec2(0.0, eps));',
+            '    // L2: 中尺度漩涡',
+            '    vec2 uv2 = st * 5.0 + vec2(sin(st.t * 5.0 + t) * 0.15, t2 * 1.2);',
+            '    float flow2 = fbm(uv2);',
+            '',
+            '    // L3: 细纹波纹 (高频)',
+            '    vec2 uv3 = st * 12.0 + vec2(cos(st.t * 7.0 + t2) * 0.1, -t * 1.8);',
+            '    float flow3 = noise(uv3);',
+            '',
+            '    // L4: 超细纹 (纳米级波纹)',
+            '    vec2 uv4 = st * 25.0 + vec2(0.0, -t * 2.5);',
+            '    float flow4 = noise(uv4);',
+            '',
+            '    // 合成 — 权重叠加',
+            '    float flow = flow1 * 0.4 + flow2 * 0.3 + flow3 * 0.2 + flow4 * 0.1;',
+            '    flow = flow * 0.5 + 0.5;',
+            '',
+            '    // === 泡沫噪声 (独立通道) ===',
+            '    vec2 uvF = st * 6.0 + vec2(meander, t * 0.6);',
+            '    float foamN1 = fbm(uvF);',
+            '    float foamN2 = noise(uvF * 3.0 + 0.5);',
+            '',
+            '    // === 三维法线扰动 (多尺度) ===',
+            '    float eps = 0.012;',
+            '    float hL = warpedFbm(uv1 + vec2(-eps, 0.0), t);',
+            '    float hR = warpedFbm(uv1 + vec2(eps, 0.0), t);',
+            '    float hD = warpedFbm(uv1 + vec2(0.0, -eps), t);',
+            '    float hU = warpedFbm(uv1 + vec2(0.0, eps), t);',
+            '',
+            '    // 第二层法线 (中尺度)',
+            '    float eps2 = 0.02;',
+            '    float hL2 = fbm(uv2 + vec2(-eps2, 0.0));',
+            '    float hR2 = fbm(uv2 + vec2(eps2, 0.0));',
+            '    float hD2 = fbm(uv2 + vec2(0.0, -eps2));',
+            '    float hU2 = fbm(uv2 + vec2(0.0, eps2));',
+            '',
             '    float ws = u_waveAmp * (0.6 + u_turbulence * 0.4);',
             '    vec3 n = materialInput.normalEC;',
-            '    n.x += (hL - hR) * ws * 3.0;',
-            '    n.y += (hD - hU) * ws * 3.0;',
+            '    n.x += (hL - hR) * ws * 3.0 + (hL2 - hR2) * ws * 1.5;',
+            '    n.y += (hD - hU) * ws * 3.0 + (hD2 - hU2) * ws * 1.5;',
             '    m.normal = normalize(n);',
             '',
-            '    // 颜色',
+            '    // === 颜色 (深度渐变) ===',
             '    float df = u_waterDepth * (0.6 + flow * 0.4);',
-            '    vec3 wc = mix(vec3(0.02, 0.10, 0.22), vec3(0.05, 0.25, 0.45), smoothstep(0.2, 0.6, df));',
-            '    wc = mix(wc, vec3(0.10, 0.42, 0.60), smoothstep(0.4, 0.8, df));',
-            '    wc = mix(wc, vec3(0.15, 0.55, 0.75), flow * 0.35);',
+            '    vec3 deepColor    = vec3(0.01, 0.06, 0.15);',  // 极深: 近黑蓝
+            '    vec3 midColor     = vec3(0.03, 0.15, 0.30);',  // 中层: 深蓝
+            '    vec3 shallowColor = vec3(0.08, 0.35, 0.50);',  // 浅水: 青蓝
+            '    vec3 surfaceColor = vec3(0.12, 0.50, 0.65);',  // 表面: 亮青',
             '',
-            '    // 泡沫',
-            '    float fe = (1.0 - bankFade) * 1.6;',
-            '    float foam = clamp(fe * 0.6 + (1.0 - abs(flow - 0.5) * 2.0) * 0.25 + foamN * 0.25, 0.0, 1.0);',
-            '    wc = mix(wc, vec3(0.82, 0.90, 0.95), foam * 0.5);',
+            '    vec3 wc = mix(deepColor, midColor, smoothstep(0.15, 0.5, df));',
+            '    wc = mix(wc, shallowColor, smoothstep(0.35, 0.75, df));',
+            '    wc = mix(wc, surfaceColor, flow * 0.3);',
             '',
-            '    // 高光（基于法线扰动）',
-            '    float ripple = abs(hL - hR) + abs(hD - hU);',
-            '    wc += ripple * ws * vec3(0.3, 0.4, 0.5);',
+            '    // === 泡沫系统 (Shadertoy 风格) ===',
+            '    // 泡沫基于: 河岸边缘 + 湍流强度 + 流速',
+            '    float foamEdge = pow(1.0 - bankFade, 1.5) * 2.0;',
+            '    float foamTurb = flow * u_turbulence * 1.5;',
+            '    float foamFlow = (1.0 - abs(flow - 0.5) * 2.0) * 0.4;',
+            '    float foam = foamEdge * 0.4 + foamTurb * 0.3 + foamFlow * 0.3;',
+            '    foam += foamN1 * 0.3 + foamN2 * 0.2;',
+            '    foam *= u_foamAmount;',
+            '    foam = clamp(foam, 0.0, 1.0);',
+            '',
+            '    // 泡沫颜色 — 略带暖色，更真实',
+            '    vec3 foamColor = vec3(0.85, 0.88, 0.92);',
+            '    wc = mix(wc, foamColor, foam * 0.6);',
+            '',
+            '    // === 高光 (基于法线扰动) ===',
+            '    float ripple1 = abs(hL - hR) + abs(hD - hU);',
+            '    float ripple2 = abs(hL2 - hR2) + abs(hD2 - hU2);',
+            '    float totalRipple = ripple1 + ripple2 * 0.5;',
+            '    wc += totalRipple * ws * vec3(0.35, 0.45, 0.55);',
+            '',
+            '    // === 天空反射色 ===',
+            '    float skyFactor = smoothstep(0.3, 0.8, flow) * 0.3;',
+            '    wc = mix(wc, vec3(0.4, 0.6, 0.85), skyFactor);',
             '',
             '    m.diffuse = wc;',
-            '    m.alpha = u_alpha * (0.65 + bankFade * 0.35);',
-            '    m.specular = 0.3 + ripple * 0.4;',
-            '    m.shininess = 20.0;',
+            '    m.alpha = u_alpha * (0.6 + bankFade * 0.4);',
+            '    m.specular = 0.3 + totalRipple * 0.5;',
+            '    m.shininess = 30.0 + u_waveAmp * 50.0;',
             '',
             '    return m;',
             '}'
@@ -235,23 +292,22 @@
                 uniforms: {
                     u_time: 0.0,
                     u_flowSpeed: 1.0,
-                    u_turbulence: 0.6,
-                    u_waveAmp: 0.5,
+                    u_turbulence: 0.7,
+                    u_waveAmp: 0.6,
                     u_waterDepth: 0.55,
-                    u_alpha: 0.82
+                    u_alpha: 0.85,
+                    u_foamAmount: 0.6
                 },
                 source: glslSource
             },
             translucent: true
         });
 
-        log('✅ 材质创建成功');
+        log('✅ 材质创建成功 (Shadertoy 风格)');
 
         // ============================================================
-        // 长江三峡 — 用 GroundPrimitive + MaterialAppearance
-        // 这是正确的方式！Entity polygon 不完全支持自定义 source
+        // 长江三峡中心线
         // ============================================================
-
         const centerline = [
             [106.55, 29.56], [106.68, 29.60], [106.85, 29.67],
             [107.00, 29.72], [107.20, 29.77], [107.40, 29.76],
@@ -326,7 +382,6 @@
             }));
         }
 
-        // 用 GroundPrimitive + MaterialAppearance
         var riverPrimitive = viewer.scene.primitives.add(
             new Cesium.GroundPrimitive({
                 geometryInstances: geometryInstances,
@@ -337,7 +392,7 @@
             })
         );
 
-        log(`已创建 ${geometryInstances.length} 段河流 (GroundPrimitive)`);
+        log(`已创建 ${geometryInstances.length} 段河流`);
 
         // ============================================================
         // 动画
@@ -387,6 +442,7 @@
             'waveAmp': 'u_waveAmp',
             'waterDepth': 'u_waterDepth',
             'alpha': 'u_alpha',
+            'foamAmount': 'u_foamAmount',
         };
 
         Object.keys(uiMap).forEach(function(id) {
